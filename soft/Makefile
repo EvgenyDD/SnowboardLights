@@ -70,7 +70,7 @@ CXXDIALECT = c++0x
 #
 #Optimization
 #
-OPT_LVL = 3
+OPT_LVL = 2
 
 #
 #Debug information options
@@ -202,3 +202,21 @@ include core.mk
 .PHONY : tags
 tags:
 	ctags -R $(SOURCES) $(INCDIR) 
+
+#####################
+### FLASH & DEBUG ###
+#####################
+
+flash: $(BINARY)
+	@openocd -d0 -f target/stm32f4xx.cfg -c "program $< 0x08000000 verify reset exit" 
+
+ds:
+	@openocd -d0 -f target/stm32f4xx.cfg
+
+debug:
+	@set _NO_DEBUG_HEAP=1
+	@echo "file $(EXECUTABLE)" > .gdbinit
+	@echo "set auto-load safe-path /" >> .gdbinit
+	@echo "set confirm off" >> .gdbinit
+	@echo "target extended-remote :3333" >> .gdbinit
+	@arm-none-eabi-gdb -q -x .gdbinit

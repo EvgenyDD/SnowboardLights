@@ -15,8 +15,9 @@ const color_t white = {255, 255, 255};
 
 static bool transfer_enabled = false;
 
-#define DELAY_LEN 48
-#define ARRAY_LEN 5 + LED_COUNT * 24 + DELAY_LEN
+#define DELAY_LEN 64
+#define PREFIX 64
+#define ARRAY_LEN PREFIX + LED_COUNT * 24 + DELAY_LEN
 
 #define TIM_COMPARE_HIGH 22
 #define TIM_COMPARE_LOW 8
@@ -147,7 +148,7 @@ void ws2812_push(void)
 	transfer_enabled = true;
 
 	bool is_on = false;
-	uint32_t iterator = 5;
+	uint32_t iterator = PREFIX;
 	for(uint32_t led = 0; led < LED_COUNT; led++)
 	{
 		if(leds[led].r ||

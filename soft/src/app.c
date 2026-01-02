@@ -4,16 +4,13 @@
 #include "dm.h"
 #include "fatfs.h"
 #include "file_operations.h"
+#include "gps.h"
 #include "main.h"
 #include "mpu6050.h"
 #include "phys_engine.h"
 #include "ws2812.h"
 #include <stdio.h>
 
-extern ADC_HandleTypeDef hadc1;
-extern DMA_HandleTypeDef hdma_adc1;
-extern CRC_HandleTypeDef hcrc;
-extern UART_HandleTypeDef huart1;
 extern UART_HandleTypeDef huart3;
 extern IWDG_HandleTypeDef hiwdg;
 extern I2C_HandleTypeDef hi2c1;
@@ -31,7 +28,6 @@ void init(void)
 
 	HAL_IWDG_Refresh(&hiwdg);
 
-	__HAL_UART_ENABLE(&huart1);
 	__HAL_UART_ENABLE(&huart3);
 	__HAL_I2C_ENABLE(&hi2c1);
 
@@ -81,6 +77,8 @@ void init(void)
 		HAL_RTC_SetDate(&hrtc, &sDate, RTC_FORMAT_BIN);
 	}
 
+	gps_init();
+
 	HAL_IWDG_Refresh(&hiwdg);
 
 	HAL_RTCEx_BKUPWrite(&hrtc, 0, SYNC_VAR);
@@ -105,9 +103,9 @@ void loop(void)
 		prev_tick = HAL_GetTick() + 1000;
 
 		debug("A: %.0f %.0f %.0f | G: %0.f %0.f %0.f | Vbat: %0.2f | Temp: %0.1f\n",
-		      accel_filt[0], accel_filt[1], accel_filt[2],
-		      gyro_filt[0], gyro_filt[1], gyro_filt[2],
-		      adc_get_v_bat(), adc_get_temp());
+			  accel_filt[0], accel_filt[1], accel_filt[2],
+			  gyro_filt[0], gyro_filt[1], gyro_filt[2],
+			  adc_get_v_bat(), adc_get_temp());
 	}
 	if(prev_tick2 < HAL_GetTick())
 	{
@@ -118,19 +116,24 @@ void loop(void)
 		HAL_RTC_GetDate(&hrtc, &date, RTC_FORMAT_BIN);
 
 		debug("Date 20%02d / %02d / %02d Time %02d:%02d:%02d\n",
-		      date.Year, date.Month, date.Date, time.Hours, time.Minutes, time.Seconds);
+			  date.Year, date.Month, date.Date, time.Hours, time.Minutes, time.Seconds);
 	}
+
+	uint32_t led_period = pvt.fixType == 3 ? 1500 : 400;
 
 	if(diff_ms > 0)
 	{
 		static uint32_t led0_cnt;
 		led0_cnt += diff_ms;
-		if(led0_cnt > 500) led0_cnt = 0;
+		if(led0_cnt > led_period) led0_cnt = 0;
 
-		bool lit = logging_enabled ? led0_cnt > 80 : led0_cnt > 480;
+		bool lit = logging_enabled ? 0 : led0_cnt < 5;
 		LED3_GPIO_Port->BSRR = LED3_Pin << (lit ? 0 : 16);
 
-		bool litb = get_percent_battery() < 0.3 ? led0_cnt > 400 : 0;
+		lit = logging_enabled ? led0_cnt < 5 : 0;
+		LED2_GPIO_Port->BSRR = LED2_Pin << (lit ? 0 : 16);
+
+		bool litb = get_percent_battery() < 0.3 ? led0_cnt < 100 : 0;
 		if(adc_get_v_bat() < 8.0) litb = true;
 		LED0_GPIO_Port->BSRR = LED0_Pin << (litb ? 0 : 16);
 	}
@@ -141,25 +144,51 @@ void loop(void)
 		{
 			if(logging_enabled)
 			{
-				uint8_t buf[128] = "";
+				// uint8_t buf[128] = "";
 
-				snprintf(buf, sizeof(buf), "%d %d %d %d %d %d %d\r\n",
-				         (int)HAL_GetTick(),
-				         accel_raw[0],
-				         accel_raw[1],
-				         accel_raw[2],
-				         gyro_raw[0],
-				         gyro_raw[1],
-				         gyro_raw[2]);
+				// snprintf(buf, sizeof(buf), "%d %d %d %d %d %d %d\r\n",
+				// 		 (int)HAL_GetTick(),
+				// 		 accel_raw[0],
+				// 		 accel_raw[1],
+				// 		 accel_raw[2],
+				// 		 gyro_raw[0],
+				// 		 gyro_raw[1],
+				// 		 gyro_raw[2]);
 
-				size_t len = strlen(buf);
+				uint8_t arr[256];
+				uint32_t i = 0;
+				uint32_t t = HAL_GetTick();
+				struct
+				{
+					int16_t accel_raw[3], gyro_raw[3];
+				} ag;
+				ag.accel_raw[0] = accel_raw[0];
+				ag.accel_raw[1] = accel_raw[1];
+				ag.accel_raw[2] = accel_raw[2];
+				ag.gyro_raw[0] = gyro_raw[0];
+				ag.gyro_raw[1] = gyro_raw[1];
+				ag.gyro_raw[2] = gyro_raw[2];
 
-				if(file_op_log(buf, strlen(buf)) == 0) logging_enabled = false;
+				memcpy(&arr[i], &t, sizeof(t));
+				i += sizeof(t);
+
+				memcpy(&arr[i], &ag, sizeof(ag));
+				i += sizeof(ag);
+
+				memcpy(&arr[i], &pvt, sizeof(pvt));
+				i += sizeof(pvt);
+
+				// size_t len = strlen(buf);
+
+				// if(file_op_log(buf, strlen(buf)) == 0) logging_enabled = false;
+				if(file_op_log(arr, i) == 0) logging_enabled = false;
 			}
 		}
 	}
 
 	ws2812_push();
+
+	gps_poll();
 
 	static bool prev_btn[4] = {1, 1, 1, 1};
 

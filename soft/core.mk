@@ -1,4 +1,39 @@
 #######################################
+#           VERSION 3.0
+# #####       Manual:             #####
+#
+# 	EXE_NAME=my_prj
+# 	SOURCES += foo.c/xx/pp
+# 	SOURCES += $(wildcard, path/.c)
+# 	SOURCES += $(call rwildcard,.,*.cpp)
+# 	INCDIR += $(dir ($(call rwildcard,.,*.h)))
+# 	MAKE_EXECUTABLE=yes
+# 	MAKE_BINARY=no
+# 	MAKE_SHARED_LIB=yes
+# 	MAKE_STATIC_LIB=yes
+#   PPDEFS=STM32 VAR0=12
+# 
+# 	BUILDDIR = build
+# 
+#   ifneq (,$(findstring Windows,$(OS)))
+#     EXT_LIBS += setupapi
+#   endif
+#   LIBDIR+=
+#
+# 	FOREIGN_MAKE_TARGETS=extlib/build/libext.so
+#
+# #####       Other: 		      #####
+# 	TCHAIN = x86_64-w64-mingw32-
+#   LDFLAGS += -static (on win c++ mingw)
+# 	CREATE_MAP=yes
+# 	CREATE_LST=yes
+# 	COLORIZE=yes
+# 	VERBOSE=yes
+#	.prebuild:
+#	$(SOURCES): dependencies
+#######################################
+
+#######################################
 # build tool's names
 #######################################
 CC=$(TCHAIN)gcc
@@ -6,10 +41,11 @@ CXX=$(TCHAIN)g++
 OC=$(TCHAIN)objcopy
 AR=$(TCHAIN)ar
 RL=$(TCHAIN)ranlib
-SZ=$(TCHAIN)size
+LST=$(TCHAIN)objdump
+rwildcard=$(foreach d,$(wildcard $(1:=/*)),$(call rwildcard,$d,$2) $(filter $(subst *,%,$2),$d))
 
 #######################################
-# color @ verbose settings
+# color & verbose settings
 #######################################
 ifeq ($(strip $(COLORIZE)),yes)
 	CLRED=\e[31m
@@ -52,13 +88,44 @@ ifneq ($(EXE_EXT),)
 	EXE_EXT:=.$(EXE_EXT)
 endif
 
+ifeq ($(EXE_NAME),)
+	EXE_NAME=program
+endif
+
+ifeq ($(BUILDDIR),)
+	BUILDDIR=build
+endif
+
+ifeq ($(MAKE_BINARY),)
+	ifeq ($(MAKE_EXECUTABLE),)
+		ifeq ($(MAKE_SHARED_LIB),)
+			ifeq ($(MAKE_STATIC_LIB),)
+				MAKE_EXECUTABLE:=yes
+			endif
+		endif
+	endif
+endif
+
+OBJDIR:=$(BUILDDIR)/obj
+UPDIR:=_updir_
+
+EXT_OBJECTS+=$(FOREIGN_MAKE_TARGETS)
+
+SELFDEP +=Makefile
+
 #######################################
 # C/C++ flags tuning
 #######################################
-FLAGS=-c -Wall -O$(OPT_LVL)
-FLAGS+=$(DBG_OPTS)
+FLAGS+=-c -Wall
+
+ifneq ($(CDIALECT),)
+FLAGS+=-O$(OPT_LVL)
+endif
+
+FLAGS+=$(DBG_OPTS) 
 FLAGS+=-MMD -MP 
 FLAGS+=$(MCPU) $(addprefix -I,$(INCDIR)) $(addprefix -D,$(PPDEFS)) 
+RCFLAGS+=$(addprefix --include,$(RCDEFS))
 
 ifneq ($(CDIALECT),)
 CFLAGS+=-std=$(CDIALECT)
@@ -70,25 +137,15 @@ endif
 
 LDFLAGS+=$(MCPU) 
 ifeq ($(strip $(CREATE_MAP)),yes)
-LDFLAGS+=-Wl,-Map=$(BUILDDIR)/map.map
+LDFLAGS+=-Wl,-Map=$(BUILDDIR)/$(EXE_NAME).map
 endif
 LDFLAGS+=$(addprefix -T,$(LDSCRIPT))
 
 #######################################
-# search path
-#######################################
-vpath %.c $(SRC_PATH)
-vpath %.s $(SRC_PATH)
-vpath %.S $(SRC_PATH)
-vpath %.cpp $(SRC_PATH)
-vpath %.cxx $(SRC_PATH)
-vpath %.c++ $(SRC_PATH)
-vpath %.cc $(SRC_PATH)
-vpath %.C $(SRC_PATH)
-
-#######################################
 # sort sources & generate object names
 #######################################
+INCDIR:=$(sort $(foreach _HEADERS, $(INCDIR), $(_HEADERS)))
+
 CXX_SOURCES:=$(filter %.cpp %.cxx %.c++ %.cc %.C, $(SOURCES))
 CXX_OBJECTS:=$(CXX_SOURCES:.cpp=.o)
 CXX_OBJECTS:=$(CXX_OBJECTS:.cxx=.o)
@@ -103,9 +160,13 @@ S_SOURCES:=$(filter %.s %.S, $(SOURCES))
 S_OBJECTS:=$(S_SOURCES:.s=.o)
 S_OBJECTS:=$(S_OBJECTS:.S=.o)
 
-CXX_OBJECTS:=$(addprefix $(BUILDDIR)/, $(CXX_OBJECTS))
-C_OBJECTS:=$(addprefix $(BUILDDIR)/, $(C_OBJECTS))
-S_OBJECTS:=$(addprefix $(BUILDDIR)/, $(S_OBJECTS))
+RC_SOURCES:=$(filter %.rc, $(SOURCES))
+RC_OBJECTS:=$(RC_SOURCES:.rc=.o)
+
+CXX_OBJECTS:=$(subst ..,$(UPDIR),$(addprefix $(OBJDIR)/, $(CXX_OBJECTS)))
+C_OBJECTS:=$(subst ..,$(UPDIR),$(addprefix $(OBJDIR)/, $(C_OBJECTS)))
+S_OBJECTS:=$(subst ..,$(UPDIR),$(addprefix $(OBJDIR)/, $(S_OBJECTS)))
+RC_OBJECTS:=$(subst ..,$(UPDIR),$(addprefix $(OBJDIR)/, $(RC_OBJECTS)))
 
 #######################################
 # decide which linker to use C or C++
@@ -119,12 +180,7 @@ endif
 #######################################
 # final list of objects
 #######################################
-LINK_OBJECTS=$(S_OBJECTS) $(C_OBJECTS) $(CXX_OBJECTS)
-
-#######################################
-# make depend on makefile & core.mk
-#######################################
-SELFDEP=Makefile core.mk
+LINK_OBJECTS=$(S_OBJECTS) $(C_OBJECTS) $(CXX_OBJECTS) $(RC_OBJECTS) $(EXT_OBJECTS)
 
 #######################################
 # list of desired artefacts
@@ -133,6 +189,7 @@ EXECUTABLE:=$(BUILDDIR)/$(EXE_NAME)$(EXE_EXT)
 BINARY:=$(BUILDDIR)/$(basename $(EXE_NAME)).bin
 SHARED_LIB:=$(BUILDDIR)/$(basename lib$(EXE_NAME))$(SHARED_LIB_EXT)
 STATIC_LIB:=$(BUILDDIR)/$(basename lib$(EXE_NAME))$(STATIC_LIB_EXT)
+LISTING:=$(BUILDDIR)/$(basename $(EXE_NAME)).lst
 
 ifeq ($(strip $(MAKE_BINARY)),yes)
 	ARTEFACTS+=$(BINARY)
@@ -150,53 +207,76 @@ ifeq ($(strip $(MAKE_STATIC_LIB)),yes)
 	ARTEFACTS+=$(STATIC_LIB)
 endif
 
+ifeq ($(strip $(CREATE_LST)),yes)
+	ARTEFACTS+=$(LISTING)
+endif
+
 #######################################
-# build & clear targets
+# CLEAN
 #######################################
-.PHONY : all clean debug
+.PHONY: all clean debug-make
+
 all: $(ARTEFACTS)
-debug:
-	@echo "C:"
-	@echo $(C_SOURCES)
-	@echo "CXX:"
-	@echo $(CXX_SOURCES)
-	@echo "S:"
-	@echo $(S_SOURCES)
-	@echo "Co:"
-	@echo $(C_OBJECTS)
-	@echo "CXXo:"
-	@echo $(CXX_OBJECTS)
-	@echo "So"
-	@echo $(S_OBJECTS)
 
-$(SHARED_LIB): $(LINK_OBJECTS)
-	$(VECHO)  ' [$(CLRED)L$(CLRST)]   $(CLRED)$@$(CLRST) ...\n'
-	$(Q)$(LD) -shared -o $@  $(LDFLAGS) $(LINK_OBJECTS) $(EXT_OBJECTS) $(addprefix -L,$(LIBDIR)) $(addprefix -l,$(EXT_LIBS)) 
+debug-make:
+	@echo "S:        " $(S_SOURCES)
+	@echo ""
+	@echo "C:        " $(C_SOURCES)
+	@echo ""
+	@echo "CXX:      " $(CXX_SOURCES)
+	@echo ""
+	@echo "RC:       " $(RC_SOURCES)
+	@echo ""
+	@echo "So:       " $(S_OBJECTS)
+	@echo ""
+	@echo "S:        " $(S_SOURCES)
+	@echo ""
+	@echo "Co:       " $(C_OBJECTS)
+	@echo ""
+	@echo "CXXo:     " $(CXX_OBJECTS)
+	@echo ""
+	@echo "RCo:      " $(RC_OBJECTS)
+	@echo ""
+	@echo "Lnk Obj:  " $(LINK_OBJECTS)
+	@echo ""
+	@echo "Artefacts:" $(ARTEFACTS)
+	@echo ""
+	@echo "Sources:  " $(SOURCES)
+	@echo ""
+	@echo "INCDIR:   " $(INCDIR)
+	@echo ""
+	@echo "EXT OBJ:  " $(EXT_OBJECTS)
 
-$(STATIC_LIB): $(LINK_OBJECTS)
-	$(VECHO)  ' [$(CLRED)AR$(CLRST)]  $(CLRED)$@$(CLRST) ...\n'
-	$(Q)$(AR) -rc $@  $(LINK_OBJECTS) $(EXT_OBJECTS) 
-	$(VECHO)  ' [$(CLRED)RL$(CLRST)]  $(CLRED)$@$(CLRST) ...\n'
-	$(Q)$(RL) $@ 
+UNAME_S := $(shell uname -s)
+UNAME_P := $(shell uname -p)
 
-$(EXECUTABLE): $(LINK_OBJECTS)
-	$(VECHO)  ' [$(CLRED)L$(CLRST)]   $(CLRED)$@$(CLRST) ...\n'
-	$(Q)$(LD) -o $@  $(LDFLAGS) $(LINK_OBJECTS) $(EXT_OBJECTS) $(addprefix -L,$(LIBDIR)) $(addprefix -l,$(EXT_LIBS)) 
-	$(Q)$(SZ) $@
+.PHONY: sys-info
+sys-info:
+	@echo WIN: $(OS) $(PROCESSOR_ARCHITECTURE)
+	@echo UNIX: $(UNAME_S) $(UNAME_P)
 
-$(BINARY) : $(EXECUTABLE)
-	$(VECHO) ' [$(CLRED)B$(CLRST)]   $(CLRED)$@$(CLRST) ...\n'
-	$(Q)$(OC) -O binary $< $(@)
+.PHONY: list-targets
+list-targets:
+	@LC_ALL=C $(MAKE) -pRrq -f $(firstword $(MAKEFILE_LIST)) : 2>/dev/null | awk -v RS= -F: '/(^|\n)# Files(\n|$$)/,/(^|\n)# Finished Make data base/ {if ($$1 !~ "^[#.]") {print $$1}}' | sort | grep -E -v -e '^[^[:alnum:]]' -e '^$@$$'
+
+ifneq ($(FOREIGN_MAKE_TARGETS),)
+clean: clean_foreign_targets
+endif
+
+clean:
+	$(Q)rm -fr $(BUILDDIR)
 
 #######################################
-# assebler targets
+# assembler targets
 #######################################
-$(BUILDDIR)/%.o: %.s $(SELFDEP)
+.SECONDEXPANSION:
+$(OBJDIR)/%.o: $$(subst $(UPDIR),..,%.s) $(SELFDEP)
 	@mkdir -p $(@D)
 	$(VECHO) ' [$(CLGRN)S$(CLRST)]   $< ...\n'
 	$(Q)$(CC) $(FLAGS) $(CFLAGS) $< -o $@
 
-$(BUILDDIR)/%.o: %.S $(SELFDEP)
+.SECONDEXPANSION:
+$(OBJDIR)/%.o: $$(subst $(UPDIR),..,%.S) $(SELFDEP)
 	@mkdir -p $(@D)
 	$(VECHO) ' [$(CLGRN)S$(CLRST)]   $< ...\n'
 	$(Q)$(CC) $(FLAGS) $(CFLAGS) $< -o $@
@@ -204,7 +284,8 @@ $(BUILDDIR)/%.o: %.S $(SELFDEP)
 #######################################
 # C targets
 #######################################
-$(BUILDDIR)/%.o: %.c $(SELFDEP)
+.SECONDEXPANSION:
+$(OBJDIR)/%.o: $$(subst $(UPDIR),..,%.c) $(SELFDEP)
 	@mkdir -p $(@D)
 	$(VECHO) ' [$(CLGRN)C$(CLRST)]   $< ...\n'
 	$(Q)$(CC) $(FLAGS) $(CFLAGS) $< -o $@
@@ -212,36 +293,178 @@ $(BUILDDIR)/%.o: %.c $(SELFDEP)
 #######################################
 # C++ targets
 #######################################
-$(BUILDDIR)/%.o: %.cpp $(SELFDEP)
+.SECONDEXPANSION:
+$(OBJDIR)/%.o: $$(subst $(UPDIR),..,%.cpp) $(SELFDEP)
 	@mkdir -p $(@D)
 	$(VECHO) ' [$(CLYEL)C++$(CLRST)] $< ...\n'
 	$(Q)$(CXX) $(FLAGS) $(CXXFLAGS) $< -o $@
 
-$(BUILDDIR)/%.o: %.C $(SELFDEP)
+.SECONDEXPANSION:
+$(OBJDIR)/%.o: $$(subst $(UPDIR),..,%.C) $(SELFDEP)
 	@mkdir -p $(@D)
 	$(VECHO) ' [$(CLYEL)C++$(CLRST)] $< ...\n'
 	$(Q)$(CXX) $(FLAGS) $(CXXFLAGS) $< -o $@
 
-$(BUILDDIR)/%.o: %.cxx $(SELFDEP)
+.SECONDEXPANSION:
+$(OBJDIR)/%.o: $$(subst $(UPDIR),..,%.cxx) $(SELFDEP)
 	@mkdir -p $(@D)
 	$(VECHO) ' [$(CLYEL)C++$(CLRST)] $< ...\n'
 	$(Q)$(CXX) $(FLAGS) $(CXXFLAGS) $< -o $@
 
-$(BUILDDIR)/%.o: %.cc $(SELFDEP)
+.SECONDEXPANSION:
+$(OBJDIR)/%.o: $$(subst $(UPDIR),..,%.cc) $(SELFDEP)
 	@mkdir -p $(@D)
 	$(VECHO) ' [$(CLYEL)C++$(CLRST)] $< ...\n'
 	$(Q)$(CXX) $(FLAGS) $(CXXFLAGS) $< -o $@
 
-$(BUILDDIR)/%.o: %.c++ $(SELFDEP)
+.SECONDEXPANSION:
+$(OBJDIR)/%.o: $$(subst $(UPDIR),..,%.c++) $(SELFDEP)
 	@mkdir -p $(@D)
 	$(VECHO) ' [$(CLYEL)C++$(CLRST)] $< ...\n'
 	$(Q)$(CXX) $(FLAGS) $(CXXFLAGS) $< -o $@
-
-clean:
-	$(Q)rm -fr $(BUILDDIR)
 
 #######################################
-# include header dependencies
+# RC targets
+#######################################
+.SECONDEXPANSION:
+$(OBJDIR)/%.o: $$(subst $(UPDIR),..,%.rc) $(SELFDEP)
+	@mkdir -p $(@D)
+	$(VECHO) ' [$(CLGRN)RC$(CLRST)]  $< ...\n'
+	$(Q)$(WINDRES) $< -o $@ $(addprefix --define ,$(RCDEFS)) $(addprefix --include-dir ,$(RCINCDIR))
+
+#######################################
+# Build targets
+#######################################
+$(EXECUTABLE): $(LINK_OBJECTS)
+	$(VECHO) ' [$(CLRED)LE$(CLRST)]  $(CLRED)$@$(CLRST) ...\n'
+	$(Q)$(LD) -o $@  $(subst ..,up,$(LINK_OBJECTS)) $(LDFLAGS) $(EXT_OBJECTS) $(addprefix -L,$(LIBDIR)) $(addprefix -l,$(EXT_LIBS)) 
+
+$(BINARY): $(EXECUTABLE)
+	$(VECHO) ' [$(CLRED)B$(CLRST)]   $(CLRED)$@$(CLRST) ...\n'
+	$(Q)$(OC) -O binary $< $@
+
+$(SHARED_LIB): $(LINK_OBJECTS)
+	$(VECHO)  ' [$(CLRED)LL$(CLRST)]   $(CLRED)$@$(CLRST) ...\n'
+	$(Q)$(LD) -shared -o $@  $(subst ..,up,$(LINK_OBJECTS)) $(LDFLAGS) $(EXT_OBJECTS) $(addprefix -L,$(LIBDIR)) $(addprefix -l,$(EXT_LIBS)) 
+
+$(STATIC_LIB): $(LINK_OBJECTS)
+	$(VECHO)  ' [$(CLRED)AR$(CLRST)]  $(CLRED)$@$(CLRST) ...\n'
+	$(Q)$(AR) -rc $@  $(subst ..,up,$(LINK_OBJECTS)) $(EXT_OBJECTS) 
+	$(VECHO)  ' [$(CLRED)RL$(CLRST)]  $(CLRED)$@$(CLRST) ...\n'
+	$(Q)$(RL) $@ 
+
+$(LISTING) : $(EXECUTABLE)
+	$(VECHO) ' [$(CLRED)LST$(CLRST)]   $(CLRED)$@$(CLRST) ...\n'
+	$(Q)$(LST) -d -t -S $< >$(@)
+
+#######################################
+# Include header dependencies
 #######################################
 -include $(C_OBJECTS:.o=.d)
 -include $(CXX_OBJECTS:.o=.d)
+
+#######################################
+# Foreign targets dependencies
+#######################################
+.PHONY: $(FOREIGN_MAKE_TARGETS)
+$(FOREIGN_MAKE_TARGETS):
+	$(MAKE) -C $(subst build/,,$(dir $@))
+
+.PHONY: clean_foreign_targets
+clean_foreign_targets:
+	$(foreach var,$(FOREIGN_MAKE_TARGETS),$(MAKE) -C $(subst build/,,$(dir $(var))) clean;)
+
+#######################################
+# FLAGS
+#######################################
+# COMMON_WARN += -Wabi
+COMMON_WARN += -Warray-bounds
+COMMON_WARN += -Wattributes
+COMMON_WARN += -Wcast-align
+COMMON_WARN += -Wcast-qual
+COMMON_WARN += -Wclobbered
+# COMMON_WARN += -Wconversion
+COMMON_WARN += -Wcoverage-mismatch
+COMMON_WARN += -Wdisabled-optimization
+COMMON_WARN += -Wfloat-equal
+COMMON_WARN += -Wformat
+COMMON_WARN += -Wformat-nonliteral
+COMMON_WARN += -Wformat-security
+COMMON_WARN += -Wformat-y2k
+COMMON_WARN += -Wformat=2
+COMMON_WARN += -Wimplicit-fallthrough
+COMMON_WARN += -Winit-self
+COMMON_WARN += -Winline
+COMMON_WARN += -Winvalid-pch
+COMMON_WARN += -Wlogical-op
+COMMON_WARN += -Wmissing-declarations
+COMMON_WARN += -Wmissing-format-attribute
+COMMON_WARN += -Wmissing-include-dirs
+# COMMON_WARN += -Wmissing-noreturn
+COMMON_WARN += -Wno-attributes
+COMMON_WARN += -Wno-builtin-macro-redefined
+COMMON_WARN += -Wno-deprecated
+COMMON_WARN += -Wno-deprecated-declarations
+COMMON_WARN += -Wno-div-by-zero
+COMMON_WARN += -Wno-endif-labels
+COMMON_WARN += -Wno-format-contains-nul
+COMMON_WARN += -Wno-format-extra-args
+COMMON_WARN += -Wno-int-in-bool-context
+COMMON_WARN += -Wno-int-to-pointer-cast
+COMMON_WARN += -Wno-multichar
+COMMON_WARN += -Wno-narrowing
+COMMON_WARN += -Wno-overflow
+COMMON_WARN += -Wno-pragmas
+COMMON_WARN += -Wno-unused
+COMMON_WARN += -Wno-unused-function
+COMMON_WARN += -Wnonnull
+COMMON_WARN += -Woverlength-strings
+COMMON_WARN += -Wpacked
+COMMON_WARN += -Wpacked-bitfield-compat
+# COMMON_WARN += -Wpadded
+COMMON_WARN += -Wpointer-arith
+COMMON_WARN += -Wredundant-decls
+COMMON_WARN += -Wshadow
+COMMON_WARN += -Wsign-compare
+# COMMON_WARN += -Wsign-conversion
+COMMON_WARN += -Wstack-protector
+COMMON_WARN += -Wstrict-aliasing=1
+COMMON_WARN += -Wstrict-overflow=2
+COMMON_WARN += -Wswitch-default
+# COMMON_WARN += -Wswitch-enum
+COMMON_WARN += -Wsync-nand
+# COMMON_WARN += -Wsystem-headers
+# COMMON_WARN += -Wundef
+COMMON_WARN += -Wunknown-pragmas
+COMMON_WARN += -Wunreachable-code
+COMMON_WARN += -Wunsafe-loop-optimizations
+COMMON_WARN += -Wunused-function
+COMMON_WARN += -Wvariadic-macros
+COMMON_WARN += -Wvla
+COMMON_WARN += -Wvolatile-register-var
+COMMON_WARN += -Wwrite-strings
+
+C_WARN += -Wimplicit-function-declaration
+C_WARN += -Wimplicit-int
+C_WARN += -Wincompatible-pointer-types
+C_WARN += -Wint-conversion
+C_WARN += -Wno-pointer-sign
+C_WARN += -Wpointer-sign
+C_WARN += -Wstrict-prototypes
+
+CXX_WARN += -Wctor-dtor-privacy
+CXX_WARN += -Wnon-virtual-dtor
+CXX_WARN += -Wreorder
+CXX_WARN += -Weffc++
+CXX_WARN += -Wold-style-cast
+CXX_WARN += -Wstrict-null-sentinel
+CXX_WARN += -Wno-non-template-friend
+CXX_WARN += -Woverloaded-virtual
+CXX_WARN += -Wno-literal-suffix
+CXX_WARN += -Wno-pmf-conversions
+CXX_WARN += -Wsign-promo
+CXX_WARN += -Wno-invalid-offsetof
+CXX_WARN += -Wc++0x-compat
+
+C_FULL_FLAGS   += -Wall -Wextra -Wpedantic $(COMMON_WARN) $(C_WARN)
+CXX_FULL_FLAGS += -Wall -Wextra -Wpedantic $(COMMON_WARN) $(CXX_WARN)

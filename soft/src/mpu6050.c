@@ -84,7 +84,6 @@ int mpu6050_read_acc_gyro(uint32_t diff_ms)
     {
         fail_read_ms = 0;
 
-        LED2_GPIO_Port->ODR ^= LED2_Pin;
         accel_raw[0] = MPU6050_Read(0x3B) << 8;
         accel_raw[0] |= MPU6050_Read(0x3C);
         accel_raw[1] = MPU6050_Read(0x3D) << 8;

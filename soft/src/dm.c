@@ -266,7 +266,7 @@ void dm_poll(uint32_t diff_ms)
 		// static float angle = 1; //3.14159256/2;
 		float angle = -0.42f +
 					  approx_atan2((float)accel_filt[1] * 0.00024420024 /*1/4095*/,
-		                           (float)accel_filt[2] * 0.00024420024); //3.14159256/2;
+								   (float)accel_filt[2] * 0.00024420024); // 3.14159256/2;
 
 		phys_engine_poll(ts, angle);
 
